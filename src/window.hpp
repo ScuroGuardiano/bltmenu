@@ -5,7 +5,9 @@
 #include <string>
 namespace sg {
 
-struct WindowDims {
+struct ScreenDims {
+  int x;
+  int y;
   unsigned int width;
   unsigned int height;
 };

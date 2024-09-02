@@ -34,7 +34,7 @@ public:
   void run() override;
   std::shared_ptr<Window> createWindow(const WindowInit &init) override;
   std::shared_ptr<Window> createCenteredWindow(const WindowInit &init) override;
-  WindowDims getRootDimensions() override;
+  ScreenDims getScreenDimensions() override;
   ~X11Application() override;
 
 private:

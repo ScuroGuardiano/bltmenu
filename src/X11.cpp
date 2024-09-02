@@ -6,6 +6,66 @@
 #include <map>
 #include <memory>
 
+// I took this code straight from dmenu
+// Idk how it exactly works but it works
+#ifdef XINERAMA
+
+#include <X11/extensions/Xinerama.h>
+
+#define MAX(A, B) ((A) > (B) ? (A) : (B))
+#define MIN(A, B) ((A) < (B) ? (A) : (B))
+#define INTERSECT(x, y, w, h, r)                                               \
+  (MAX(0, MIN((x) + (w), (r).x_org + (r).width) - MAX((x), (r).x_org)) *       \
+   MAX(0, MIN((y) + (h), (r).y_org + (r).height) - MAX((y), (r).y_org)))
+
+#endif
+
+bool getXineramaScreenDims(Display *dpy, X_Window root,
+                           sg::ScreenDims *sd_out) {
+#ifdef XINERAMA
+  XineramaScreenInfo *info;
+  Window pw, w, dw, *dws;
+  XWindowAttributes wa;
+  int x, y, a, di, i = 0, n, area = 0;
+  unsigned int du;
+
+  if ((info = XineramaQueryScreens(dpy, &n))) {
+    XGetInputFocus(dpy, &w, &di);
+    if (w != root && w != PointerRoot && w != None) {
+      /* find top-level window containing current input focus */
+      do {
+        if (XQueryTree(dpy, (pw = w), &dw, &w, &dws, &du) && dws)
+          XFree(dws);
+      } while (w != root && w != pw);
+      /* find xinerama screen with which the window intersects most */
+      if (XGetWindowAttributes(dpy, pw, &wa))
+        for (int j = 0; j < n; j++)
+          if ((a = INTERSECT(wa.x, wa.y, wa.width, wa.height, info[j])) >
+              area) {
+            area = a;
+            i = j;
+          }
+    }
+    /* no focused window is on screen, so use pointer location instead */
+    if (!area &&
+        XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
+      for (i = 0; i < n; i++)
+        if (INTERSECT(x, y, 1, 1, info[i]) != 0)
+          break;
+
+    sd_out->x = info[i].x_org;
+    sd_out->y = info[i].y_org;
+    sd_out->width = info[i].width;
+    sd_out->height = info[i].height;
+    XFree(info);
+
+    return true;
+  }
+#endif
+
+  return false;
+}
+
 namespace sg {
 
 static std::map<uint32_t, unsigned int> cachedColors;
@@ -47,7 +107,8 @@ void X11Window::drawRectangle(int x, int y, unsigned int width,
                               unsigned int height, const Color &color,
                               unsigned int lineWidth) {
   XSetForeground(this->dpy, this->gc, colorToPixel(this->dpy, color));
-  XSetLineAttributes(this->dpy, this->gc, lineWidth, LineSolid, CapNotLast, JoinMiter);
+  XSetLineAttributes(this->dpy, this->gc, lineWidth, LineSolid, CapNotLast,
+                     JoinMiter);
   XDrawRectangle(this->dpy, this->win, this->gc, x, y, width, height);
 }
 
@@ -119,18 +180,26 @@ std::shared_ptr<Window> X11Application::createWindow(const WindowInit &init) {
 std::shared_ptr<Window>
 X11Application::createCenteredWindow(const WindowInit &init) {
   WindowInit copied = init;
-  XWindowAttributes attrib;
-  XGetWindowAttributes(this->dpy, this->root, &attrib);
-  copied.x = (attrib.width - copied.width) / 2;
-  copied.y = (attrib.height - copied.height) / 2;
+
+  ScreenDims dims = this->getScreenDimensions();
+
+  copied.x = (dims.width - copied.width) / 2;
+  copied.y = (dims.height - copied.height) / 2;
 
   return this->createWindow(copied);
 }
 
-WindowDims X11Application::getRootDimensions() {
+ScreenDims X11Application::getScreenDimensions() {
+  ScreenDims dims;
+
+  if (getXineramaScreenDims(this->dpy, this->root, &dims)) {
+    return dims;
+  }
+
   XWindowAttributes attrib;
   XGetWindowAttributes(this->dpy, this->root, &attrib);
-  WindowDims dims;
+  dims.x = 0;
+  dims.y = 0;
   dims.width = attrib.width;
   dims.height = attrib.height;
 
