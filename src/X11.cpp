@@ -1,10 +1,12 @@
 #include "X11.hpp"
 #include "src/window.hpp"
 #include <X11/X.h>
+#include <X11/Xft/Xft.h>
 #include <X11/Xlib.h>
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <sstream>
 
 // I took this code straight from dmenu
 // Idk how it exactly works but it works
@@ -21,7 +23,7 @@
 #endif
 
 bool getXineramaScreenDims(Display *dpy, X_Window root,
-                           sg::ScreenDims *sd_out) {
+                           sg::DimsAndPos *sd_out) {
 #ifdef XINERAMA
   XineramaScreenInfo *info;
   Window pw, w, dw, *dws;
@@ -47,8 +49,7 @@ bool getXineramaScreenDims(Display *dpy, X_Window root,
           }
     }
     /* no focused window is on screen, so use pointer location instead */
-    if (!area &&
-        XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
+    if (!area && XQueryPointer(dpy, root, &dw, &dw, &x, &y, &di, &di, &du))
       for (i = 0; i < n; i++)
         if (INTERSECT(x, y, 1, 1, info[i]) != 0)
           break;
@@ -68,30 +69,33 @@ bool getXineramaScreenDims(Display *dpy, X_Window root,
 
 namespace sg {
 
-static std::map<uint32_t, unsigned int> cachedColors;
+static std::map<uint32_t, XftColor> cachedColors;
 
-unsigned int colorToPixel(Display *dpy, const Color &color) {
+XftColor* colorToXftColor(Display *dpy, const Color &color) {
   uint32_t key = color.r + (color.g << 8) + (color.b << 16);
   if (cachedColors.count(key) == 1) {
-    return cachedColors[key];
+    return &cachedColors[key];
   }
 
-  XColor sc, tc;
   // rgb:rr/bb/gg<NULL>
   char buf[4 + 3 + 3 + 2 + 1];
   std::snprintf(buf, sizeof(buf), "rgb:%02x/%02x/%02x", color.r, color.g,
                 color.b);
 
-  XAllocNamedColor(dpy, DefaultColormap(dpy, DefaultScreen(dpy)), buf, &sc,
-                   &tc);
-  cachedColors[key] = sc.pixel;
+  // FIXME: color should be allocated on screen of rendered window and not default.
+  XftColorAllocName(dpy, DefaultVisual(dpy, DefaultScreen(dpy)),
+                    DefaultColormap(dpy, DefaultScreen(dpy)), buf, &cachedColors[key]);
 
-  return sc.pixel;
+  return &cachedColors[key];
 }
 
-X11Window::X11Window(Display *dpy, X_Window win) {
-  this->dpy = dpy;
-  this->win = win;
+unsigned int colorToPixel(Display *dpy, const Color &color) {
+  return colorToXftColor(dpy, color)->pixel;
+}
+
+X11Window::X11Window(Display *dpy, X_Window win)
+    // FIXME: drw screen should be screen of rendered window and not default.
+    : dpy(dpy), win(win), drw(dpy, DefaultScreen(dpy), win) {
   this->gc = XCreateGC(this->dpy, this->win, 0, nullptr);
 }
 
@@ -116,6 +120,36 @@ void X11Window::fillRectangle(int x, int y, unsigned int width,
                               unsigned int height, const Color &color) {
   XSetForeground(this->dpy, this->gc, colorToPixel(this->dpy, color));
   XFillRectangle(this->dpy, this->win, this->gc, x, y, width, height);
+}
+
+void X11Window::setFonts(const std::vector<Font> &fonts) {
+  std::vector<std::string> fontnames;
+  fontnames.reserve(fonts.size());
+
+  for (const auto &font : fonts) {
+    std::stringstream ss;
+    ss << font.family << ":size=" << font.size;
+    fontnames.push_back(ss.str());
+  }
+
+  this->drw.createAndApplyFontSet(fontnames);
+}
+
+void X11Window::drawText(int x, int y, unsigned int width, unsigned int height,
+                         const char *text, const Color &color) {
+  this->drawText(x, y, width, height, text, color, false);
+}
+
+void X11Window::drawText(int x, int y, unsigned int width, unsigned int height,
+                         const char *text, const Color &color, bool ellipsis) {
+  this->drw.text(x, y, width, height, text, colorToXftColor(this->dpy, color), ellipsis);
+}
+
+Dims X11Window::measureText(const char *text) {
+  Dims dims;
+  dims.height = 0;
+  dims.width = this->drw.fontsetGetWidth(text);
+  return dims;
 }
 
 void X11Window::notifyDestroyed() { this->win = 0; }
@@ -181,16 +215,16 @@ std::shared_ptr<Window>
 X11Application::createCenteredWindow(const WindowInit &init) {
   WindowInit copied = init;
 
-  ScreenDims dims = this->getScreenDimensions();
+  DimsAndPos dims = this->getScreenDimensions();
 
-  copied.x = (dims.width - copied.width) / 2;
-  copied.y = (dims.height - copied.height) / 2;
+  copied.x = (dims.width - copied.width) / 2 + dims.x;
+  copied.y = (dims.height - copied.height) / 2 + dims.y;
 
   return this->createWindow(copied);
 }
 
-ScreenDims X11Application::getScreenDimensions() {
-  ScreenDims dims;
+DimsAndPos X11Application::getScreenDimensions() {
+  DimsAndPos dims;
 
   if (getXineramaScreenDims(this->dpy, this->root, &dims)) {
     return dims;

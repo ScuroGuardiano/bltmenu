@@ -2,16 +2,27 @@ project(
   'bltmenu',
   'cpp',
   version: '0.1',
-  default_options: ['warning_level=3', 'cpp_std=c++14'],
+  default_options: ['warning_level=3', 'cpp_std=c++17'],
 )
 
 XINERAMA = true
 
 compiler = meson.get_compiler('cpp')
-deps = [dependency('x11')]
-src = ['bltmenu.cpp', 'src/X11.cpp']
 
-cpp_args = []
+xft_dep = compiler.find_library('Xft')
+fontconfig_dep = compiler.find_library('fontconfig')
+
+deps = [
+  dependency('x11'),
+  xft_dep,
+  fontconfig_dep
+]
+
+src = ['bltmenu.cpp', 'src/X11.cpp', 'src/drw.cpp', 'src/utf8.cpp']
+
+cpp_args = [
+  '-I/usr/include/freetype2'
+]
 
 if XINERAMA
   xinerama_dep = compiler.find_library('Xinerama')
